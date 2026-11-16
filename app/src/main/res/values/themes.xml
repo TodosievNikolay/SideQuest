@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.SideQuest" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0C1117</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
