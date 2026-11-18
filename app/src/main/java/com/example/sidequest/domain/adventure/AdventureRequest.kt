@@ -6,6 +6,7 @@ data class AdventureRequest(
     val party: AdventureParty,
     val maxBudgetPln: Int,
     val interests: String,
+    val city: QuestCity? = null,
 ) {
     init {
         require(durationMinutes in DURATIONS) { "Unsupported adventure duration." }

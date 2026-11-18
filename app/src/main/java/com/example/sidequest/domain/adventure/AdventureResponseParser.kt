@@ -13,22 +13,46 @@ class InvalidAdventureResponseException(message: String, cause: Throwable? = nul
 
 object AdventureResponseParser {
     const val CHAPTER_COUNT = 3
+    const val MAX_TITLE_LENGTH = 64
+    const val MAX_INTRODUCTION_LENGTH = 220
+    const val MAX_STORY_CONTEXT_LENGTH = 120
+    const val MAX_MISSION_LENGTH = 200
+    const val MAX_COMPLETION_LENGTH = 100
 
-    private const val MAX_TITLE_LENGTH = 100
-    private const val MAX_INTRODUCTION_LENGTH = 800
-    private const val MAX_MISSION_LENGTH = 800
-    private const val MAX_COMPLETION_LENGTH = 400
-
-    fun parse(json: String, request: AdventureRequest): Adventure {
+    fun parse(
+        json: String,
+        request: AdventureRequest,
+        chapterPlaces: List<QuestPlace> = emptyList(),
+    ): Adventure {
+        if (request.city != null && chapterPlaces.size != CHAPTER_COUNT) {
+            throw InvalidAdventureResponseException("Each city chapter needs a mapped place.")
+        }
         val response = try {
             Json.parseToJsonElement(json) as? JsonObject
         } catch (error: SerializationException) {
             throw InvalidAdventureResponseException("The response contains invalid JSON.", error)
         } ?: throw InvalidAdventureResponseException("The response must be a JSON object.")
 
-        val chapters = response["chapters"] as? JsonArray
-        if (chapters == null || chapters.size != CHAPTER_COUNT) {
+        val chapterValues = response["chapters"] as? JsonArray
+        if (chapterValues == null || chapterValues.size != CHAPTER_COUNT) {
             throw InvalidAdventureResponseException("The adventure must have exactly three chapters.")
+        }
+
+        val chapters = chapterValues.mapIndexed { index, value ->
+            val chapter = value as? JsonObject
+                ?: throw InvalidAdventureResponseException("Each chapter must be a JSON object.")
+            AdventureChapter(
+                title = chapter.requiredText("title", MAX_TITLE_LENGTH),
+                mission = chapter.requiredText("mission", MAX_MISSION_LENGTH),
+                completionCriteria = chapter.requiredText("completionCriteria", MAX_COMPLETION_LENGTH),
+                storyContext = chapter.requiredText("storyContext", MAX_STORY_CONTEXT_LENGTH),
+                place = chapterPlaces.getOrNull(index),
+            )
+        }
+        if (chapters.distinctBy { it.title.lowercase() }.size != CHAPTER_COUNT ||
+            chapters.distinctBy { it.mission.lowercase() }.size != CHAPTER_COUNT
+        ) {
+            throw InvalidAdventureResponseException("Each chapter must have a distinct title and mission.")
         }
 
         return Adventure(
@@ -37,15 +61,8 @@ object AdventureResponseParser {
             introduction = response.requiredText("introduction", MAX_INTRODUCTION_LENGTH),
             estimatedDurationMinutes = response.requiredInt("estimatedDurationMinutes", 1..request.durationMinutes),
             estimatedCostPln = response.requiredInt("estimatedCostPln", 0..request.maxBudgetPln),
-            chapters = chapters.map { value ->
-                val chapter = value as? JsonObject
-                    ?: throw InvalidAdventureResponseException("Each chapter must be a JSON object.")
-                AdventureChapter(
-                    title = chapter.requiredText("title", MAX_TITLE_LENGTH),
-                    mission = chapter.requiredText("mission", MAX_MISSION_LENGTH),
-                    completionCriteria = chapter.requiredText("completionCriteria", MAX_COMPLETION_LENGTH),
-                )
-            },
+            chapters = chapters,
+            cityName = request.city?.displayName,
         )
     }
 

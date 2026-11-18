@@ -24,6 +24,7 @@ class AdventureResponseParserTest {
         assertEquals(60, adventure.estimatedDurationMinutes)
         assertEquals(30, adventure.estimatedCostPln)
         assertEquals(3, adventure.chapters.size)
+        assertEquals("Clue 1 points to an everyday pattern.", adventure.chapters.first().storyContext)
         assertEquals("Take a short note.", adventure.chapters.first().completionCriteria)
         assertEquals(adventure.id, UUID.fromString(adventure.id).toString())
         assertNotEquals(adventure.id, secondAdventure.id)
@@ -55,8 +56,57 @@ class AdventureResponseParserTest {
         assertInvalid(response(cost = "30.0"))
         assertInvalid(response().replace("\"Hidden Details\"", "true"))
         assertInvalid(response().replace("Take a short note.", " "))
-        assertInvalid(response().replace("Take a short note.", "a".repeat(401)))
+        assertInvalid(
+            response().replace(
+                "Take a short note.",
+                "a".repeat(AdventureResponseParser.MAX_COMPLETION_LENGTH + 1),
+            ),
+        )
         assertInvalid(response().replace(", \"completionCriteria\": \"Take a short note.\"", ""))
+    }
+
+    @Test
+    fun requiresShortStoryContextForNewChapters() {
+        val context = "Clue 1 points to an everyday pattern."
+        assertInvalid(response().replace("\"storyContext\": \"$context\",", ""))
+        assertInvalid(response().replace(context, " "))
+        assertInvalid(response().replace(context, "a".repeat(AdventureResponseParser.MAX_STORY_CONTEXT_LENGTH + 1)))
+    }
+
+    @Test
+    fun rejectsRepeatedTitlesAndMissions() {
+        assertInvalid(response().replace("\"Chapter 2\"", "\"chapter 1\""))
+        assertInvalid(response().replace("Find architectural detail 2.", "Find architectural detail 1."))
+    }
+
+    @Test
+    fun usesMappedPlacesAndCityFromTheApplication() {
+        val city = QuestCity("city:1", "Odesa", "Odesa Oblast", "Ukraine", 46.48, 30.73, "https://www.openstreetmap.org/relation/1")
+        val places = (1..3).map { index ->
+            QuestPlace("way:$index", "Square $index", "Square", 46.48, 30.73, "https://www.openstreetmap.org/way/$index")
+        }
+        val adventure = AdventureResponseParser.parse(response(), request.copy(city = city), places)
+
+        assertEquals(city.displayName, adventure.cityName)
+        assertEquals(places, adventure.chapters.map { it.place })
+    }
+
+    @Test
+    fun rejectsCityAdventureWithoutThreeMappedLocations() {
+        val city = QuestCity("city:1", "Odesa", "Odesa Oblast", "Ukraine", 46.48, 30.73, "https://www.openstreetmap.org/relation/1")
+        assertInvalid(response(), request.copy(city = city))
+    }
+
+    @Test
+    fun preservesOneSettlementAreaAcrossThreeDistinctMissions() {
+        val city = QuestCity("node:12", "Small Village", "", "Poland", 54.7, 18.0, "https://www.openstreetmap.org/node/12")
+        val area = QuestPlace(city.id, city.name, QuestPlace.SETTLEMENT_AREA_CATEGORY, city.latitude, city.longitude, city.sourceUrl)
+
+        val adventure = AdventureResponseParser.parse(response(), request.copy(city = city), List(3) { area })
+
+        assertEquals(List(3) { area }, adventure.chapters.map { it.place })
+        assertEquals(3, adventure.chapters.distinctBy { it.mission }.size)
+        assertEquals(city.displayName, adventure.cityName)
     }
 
     @Test
@@ -77,7 +127,13 @@ class AdventureResponseParserTest {
         chapterCount: Int = 3,
     ): String {
         val chapters = (1..chapterCount).joinToString { index ->
-            """{"title": "Chapter $index", "mission": "Find an architectural detail.", "completionCriteria": "Take a short note."}"""
+            """
+                {
+                    "title": "Chapter $index",
+                    "storyContext": "Clue $index points to an everyday pattern.",
+                    "mission": "Find architectural detail $index.", "completionCriteria": "Take a short note."
+                }
+            """.trimIndent()
         }
         return """
             {

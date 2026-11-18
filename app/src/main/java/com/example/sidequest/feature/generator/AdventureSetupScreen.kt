@@ -16,6 +16,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,6 +40,7 @@ import com.example.sidequest.R
 import com.example.sidequest.domain.adventure.AdventureMood
 import com.example.sidequest.domain.adventure.AdventureParty
 import com.example.sidequest.domain.adventure.AdventureRequest
+import com.example.sidequest.domain.adventure.QuestCity
 
 private val MoodLabels = mapOf(
     AdventureMood.ADVENTURE to R.string.mood_adventure,
@@ -52,6 +54,11 @@ fun AdventureSetupScreen(
     state: AdventureGenerationState,
     onGenerate: (AdventureRequest) -> Unit,
     onBack: () -> Unit,
+    citySearchState: CitySearchState,
+    selectedCity: QuestCity?,
+    onSearchCity: (String) -> Unit,
+    onSelectCity: (QuestCity) -> Unit,
+    onCityQueryChanged: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var durationMinutes by rememberSaveable { mutableIntStateOf(60) }
@@ -59,6 +66,7 @@ fun AdventureSetupScreen(
     var isGroup by rememberSaveable { mutableStateOf(false) }
     var budget by rememberSaveable { mutableStateOf("") }
     var interests by rememberSaveable { mutableStateOf("") }
+    var cityQuery by rememberSaveable { mutableStateOf(selectedCity?.name.orEmpty()) }
     val focusManager = LocalFocusManager.current
     val generating = state == AdventureGenerationState.Loading
     val maxBudgetPln = if (budget.isBlank()) 0 else budget.trim().toIntOrNull()?.takeIf { it >= 0 }
@@ -79,6 +87,72 @@ fun AdventureSetupScreen(
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Black,
         )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = cityQuery,
+                onValueChange = {
+                    cityQuery = it.take(100)
+                    onCityQueryChanged()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.city)) },
+                supportingText = { Text(stringResource(R.string.city_search_hint)) },
+                enabled = !generating,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onSearch = {
+                        if (cityQuery.isNotBlank() && !generating && citySearchState != CitySearchState.Loading) {
+                            focusManager.clearFocus()
+                            onSearchCity(cityQuery.trim())
+                        }
+                    },
+                ),
+                singleLine = true,
+            )
+            OutlinedButton(
+                onClick = {
+                    focusManager.clearFocus()
+                    onSearchCity(cityQuery.trim())
+                },
+                enabled = cityQuery.isNotBlank() && !generating && citySearchState != CitySearchState.Loading,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Text(stringResource(if (citySearchState == CitySearchState.Loading) R.string.finding_city else R.string.find_city))
+            }
+            if (selectedCity != null) {
+                Text(
+                    text = stringResource(R.string.selected_city, selectedCity.displayName),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    color = MaterialTheme.colorScheme.secondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            when (citySearchState) {
+                is CitySearchState.Found -> {
+                    if (selectedCity == null) {
+                        citySearchState.cities.forEach { city ->
+                            FilterChip(
+                                selected = false,
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    onSelectCity(city)
+                                },
+                                label = { Text(city.displayName) },
+                                enabled = !generating,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+                is CitySearchState.Failed -> Text(
+                    text = stringResource(citySearchState.error.messageResource()),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                else -> Unit
+            }
+        }
         SetupChoices(label = stringResource(R.string.available_time)) {
             AdventureRequest.DURATIONS.forEach { minutes ->
                 FilterChip(
@@ -153,7 +227,7 @@ fun AdventureSetupScreen(
             }
             Button(
                 onClick = {
-                    if (maxBudgetPln != null) {
+                    if (maxBudgetPln != null && selectedCity != null) {
                         focusManager.clearFocus()
                         onGenerate(
                             AdventureRequest(
@@ -162,11 +236,12 @@ fun AdventureSetupScreen(
                                 party = if (isGroup) AdventureParty.GROUP else AdventureParty.SOLO,
                                 maxBudgetPln = maxBudgetPln,
                                 interests = interests.trim(),
+                                city = selectedCity,
                             ),
                         )
                     }
                 },
-                enabled = maxBudgetPln != null && !generating,
+                enabled = maxBudgetPln != null && selectedCity != null && !generating,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
@@ -189,12 +264,22 @@ fun AdventureSetupScreen(
     }
 }
 
+private fun CitySearchError.messageResource(): Int = when (this) {
+    CitySearchError.NOT_FOUND -> R.string.city_not_found
+    CitySearchError.NETWORK -> R.string.city_network_error
+    CitySearchError.UNAVAILABLE -> R.string.city_unavailable
+}
+
 private fun AdventureGenerationError.messageResource(): Int = when (this) {
     AdventureGenerationError.UNAVAILABLE -> R.string.generation_unavailable
     AdventureGenerationError.NETWORK -> R.string.generation_network_error
     AdventureGenerationError.TIMED_OUT -> R.string.generation_timeout_error
+    AdventureGenerationError.BUSY -> R.string.generation_busy_error
     AdventureGenerationError.QUOTA -> R.string.generation_quota_error
     AdventureGenerationError.INVALID_RESPONSE -> R.string.generation_invalid_response
+    AdventureGenerationError.CITY_NOT_FOUND -> R.string.city_places_not_found
+    AdventureGenerationError.CITY_NETWORK -> R.string.city_places_network_error
+    AdventureGenerationError.CITY_UNAVAILABLE -> R.string.city_unavailable
     AdventureGenerationError.UNKNOWN -> R.string.generation_unknown_error
 }
 
